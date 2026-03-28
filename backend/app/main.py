@@ -1,11 +1,12 @@
 import os
-from datetime import timedelta
+from datetime import timedelta, datetime
 from fastapi import FastAPI, Depends, HTTPException, status, Query
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 from sqlalchemy import func, and_, or_
 from decimal import Decimal
 from dotenv import load_dotenv
+from fastapi.middleware.cors import CORSMiddleware
 
 from .db import get_db, test_connection, init_db
 from .schemas import (
@@ -21,6 +22,28 @@ from .auth import (
 load_dotenv()
 
 app = FastAPI(title="Market API", version="1.0.0")
+
+_cors_default = (
+    "http://localhost:5173,http://127.0.0.1:5173,"
+    "http://localhost:3000,http://127.0.0.1:3000"
+)
+_cors_raw = os.getenv("CORS_ORIGINS", _cors_default)
+_cors_origins = [o.strip() for o in _cors_raw.split(",") if o.strip()]
+if not _cors_origins:
+    _cors_origins = [o.strip() for o in _cors_default.split(",") if o.strip()]
+# Browsers treat localhost vs 127.0.0.1 as different origins; LAN / IPv6 need this too.
+_cors_regex = os.getenv(
+    "CORS_ORIGIN_REGEX",
+    r"https?://(localhost|127\.0\.0\.1|\[::1\])(:\d+)?",
+)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_cors_origins,
+    allow_origin_regex=_cors_regex or None,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Initialize database on startup
 @app.on_event("startup")
@@ -40,11 +63,6 @@ def health():
         return {"status": "healthy"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/users")
-def list_users(db: Session = Depends(get_db)):
-    return db.query(User).all()
 
 
 # ==================== Authentication ====================
@@ -98,12 +116,6 @@ def register(user_data: models.UserRegister, db: Session = Depends(get_db)):
             display_name=user_data.display_name
         )
 
-        db_user = User(
-            email=user_data.email,
-            password_hash=hash_password(user_data.password),
-            display_name=user_data.display_name
-        )
-
         db.add(db_user)
         db.flush()
         db.refresh(db_user)
@@ -153,12 +165,75 @@ def get_current_user(
         )
     return user
 
+
+def _order_to_response(db: Session, order: Order) -> models.OrderResponse:
+    items = db.query(OrderItem).filter(OrderItem.order_id == order.order_id).all()
+    promo_codes = [
+        row[0]
+        for row in db.query(PromoCode.code)
+        .join(OrderPromo, OrderPromo.promo_code_id == PromoCode.promo_code_id)
+        .filter(OrderPromo.order_id == order.order_id)
+        .all()
+    ]
+    return models.OrderResponse(
+        order_id=order.order_id,
+        user_id=order.user_id,
+        status=order.status,
+        total_amount=order.total_amount,
+        shipping_address=order.shipping_address,
+        placed_at=order.placed_at,
+        items=[models.OrderItemResponse.model_validate(i) for i in items],
+        promo_codes=promo_codes,
+    )
+
+
+def _resolve_promo_for_order(db: Session, code: str | None) -> PromoCode | None:
+    if not code or not code.strip():
+        return None
+    promo = db.query(PromoCode).filter(PromoCode.code == code.strip()).first()
+    if not promo:
+        raise HTTPException(status_code=400, detail="Invalid promo code")
+    if not promo.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Promo code is not active",
+        )
+    if promo.expires_at is not None and promo.expires_at < datetime.utcnow():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Promo code has expired",
+        )
+    return promo
+
+
+def _discount_from_promo(subtotal: Decimal, promo: PromoCode) -> Decimal:
+    if promo.discount_type == "percent":
+        pct = min(promo.discount_value, Decimal(100))
+        return (subtotal * pct / Decimal(100)).quantize(Decimal("0.01"))
+    return min(subtotal, promo.discount_value)
+
+
 # ==================== User Routes ====================
 
 @app.get("/users/me", response_model=models.UserResponse)
 def get_profile(current_user: User = Depends(get_current_user)):
     """Get current user profile"""
     return current_user
+
+
+@app.get("/users", response_model=list[models.UserResponse])
+def list_users(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Admin only — lists rows from the `users` table."""
+    if not current_user.is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin only",
+        )
+    return db.query(User).order_by(User.user_id).all()
+
 
 # ==================== Category Routes ====================
 
@@ -195,7 +270,7 @@ def create_category(
 @app.get("/products", response_model=list[models.ProductResponse])
 def list_products(
     skip: int = Query(0, ge=0),
-    limit: int = Query(20, ge=1, le=100),
+    limit: int = Query(20, ge=1, le=500),
     category_id: int = Query(None),
     search: str = Query(None),
     featured_only: bool = Query(False),
@@ -281,21 +356,36 @@ def get_cart(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Get user's cart"""
+    """Get user's cart (`carts` + `cart_items` with product names/prices)."""
     cart = db.query(Cart).filter(Cart.user_id == current_user.user_id).first()
     if not cart:
-        raise HTTPException(status_code=404, detail="Cart not found")
-    
-    items = db.query(CartItem).join(Product).filter(
-        CartItem.cart_id == cart.cart_id
-    ).all()
-    
+        cart = Cart(user_id=current_user.user_id)
+        db.add(cart)
+        db.commit()
+        db.refresh(cart)
+
+    cart_items = db.query(CartItem).filter(CartItem.cart_id == cart.cart_id).all()
+    items_out = []
+    for ci in cart_items:
+        p = db.query(Product).filter(Product.product_id == ci.product_id).first()
+        if not p:
+            continue
+        items_out.append(
+            {
+                "cart_item_id": ci.cart_item_id,
+                "product_id": ci.product_id,
+                "quantity": ci.quantity,
+                "product_name": p.product_name,
+                "price": p.price,
+            }
+        )
+
     return {
         "cart_id": cart.cart_id,
         "user_id": cart.user_id,
-        "items": items,
+        "items": items_out,
         "created_at": cart.created_at,
-        "updated_at": cart.updated_at
+        "updated_at": cart.updated_at,
     }
 
 @app.post("/cart/items", response_model=models.CartItemResponse)
@@ -394,70 +484,85 @@ def create_order(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Create order from cart"""
-    # Get cart
+    """Create order from cart (`orders`, `order_items`, optional `order_promos`)."""
     cart = db.query(Cart).filter(Cart.user_id == current_user.user_id).first()
     if not cart:
         raise HTTPException(status_code=404, detail="Cart not found")
-    
-    # Get cart items
+
     cart_items = db.query(CartItem).filter(CartItem.cart_id == cart.cart_id).all()
     if not cart_items:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Cart is empty"
+            detail="Cart is empty",
         )
-    
-    # Calculate total
-    total = Decimal(0)
-    order_items = []
-    
+
+    promo = _resolve_promo_for_order(db, order_data.promo_code)
+
+    subtotal = Decimal(0)
+    order_items: list[OrderItem] = []
+
     for cart_item in cart_items:
         product = db.query(Product).filter(Product.product_id == cart_item.product_id).first()
         if not product:
-            raise HTTPException(status_code=404, detail=f"Product {cart_item.product_id} not found")
-        
+            raise HTTPException(
+                status_code=404, detail=f"Product {cart_item.product_id} not found"
+            )
+
         item_total = product.price * cart_item.quantity
-        total += item_total
-        
-        order_items.append(OrderItem(
-            product_id=product.product_id,
-            product_name_snapshot=product.product_name,
-            unit_price=product.price,
-            quantity=cart_item.quantity
-        ))
-    
-    # Create order
+        subtotal += item_total
+
+        order_items.append(
+            OrderItem(
+                product_id=product.product_id,
+                product_name_snapshot=product.product_name,
+                unit_price=product.price,
+                quantity=cart_item.quantity,
+            )
+        )
+
+    discount = _discount_from_promo(subtotal, promo) if promo else Decimal(0)
+    total = subtotal - discount
+    if total < 0:
+        total = Decimal(0)
+
     order = Order(
         user_id=current_user.user_id,
         status="pending",
         total_amount=total,
-        shipping_address=order_data.shipping_address
+        shipping_address=order_data.shipping_address,
     )
     db.add(order)
     db.flush()
-    
-    # Add order items
+
     for order_item in order_items:
         order_item.order_id = order.order_id
         db.add(order_item)
-    
-    # Clear cart
+
+    if promo:
+        db.add(
+            OrderPromo(order_id=order.order_id, promo_code_id=promo.promo_code_id)
+        )
+
     db.query(CartItem).filter(CartItem.cart_id == cart.cart_id).delete()
-    
+
     db.commit()
     db.refresh(order)
-    
-    return order
+
+    return _order_to_response(db, order)
 
 @app.get("/orders", response_model=list[models.OrderResponse])
 def list_orders(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """List user's orders"""
-    orders = db.query(Order).filter(Order.user_id == current_user.user_id).all()
-    return orders
+    """List user's orders with line items (`order_items`) and `order_promos`."""
+    orders = (
+        db.query(Order)
+        .filter(Order.user_id == current_user.user_id)
+        .order_by(Order.placed_at.desc())
+        .all()
+    )
+    return [_order_to_response(db, o) for o in orders]
 
 @app.get("/orders/{order_id}", response_model=models.OrderResponse)
 def get_order(
@@ -472,7 +577,7 @@ def get_order(
     
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
-    return order
+    return _order_to_response(db, order)
 
 @app.put("/orders/{order_id}", response_model=models.OrderResponse)
 def update_order_status(
@@ -502,7 +607,7 @@ def update_order_status(
     order.status = status_update.status
     db.commit()
     db.refresh(order)
-    return order
+    return _order_to_response(db, order)
 
 # ==================== Review Routes ====================
 

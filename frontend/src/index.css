@@ -7,10 +7,12 @@
 }
 
 body {
-  background: #0A0A0A;
+  background: #0a0a0a;
   overflow-x: hidden;
 }
 
 @keyframes ticker {
-  to { transform: translateX(-50%); }
+  to {
+    transform: translateX(-50%);
+  }
 }

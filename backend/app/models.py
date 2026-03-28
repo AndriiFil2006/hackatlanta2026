@@ -98,18 +98,8 @@ class CartResponse(BaseModel):
 # Order Models
 class OrderCreate(BaseModel):
     shipping_address: str
+    promo_code: Optional[str] = None
 
-class OrderResponse(BaseModel):
-    order_id: int
-    user_id: int
-    status: str
-    total_amount: Decimal
-    shipping_address: str
-    placed_at: datetime
-    items: List['OrderItemResponse']
-
-    class Config:
-        from_attributes = True
 
 class OrderItemResponse(BaseModel):
     order_item_id: int
@@ -120,6 +110,21 @@ class OrderItemResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class OrderResponse(BaseModel):
+    order_id: int
+    user_id: int
+    status: str
+    total_amount: Decimal
+    shipping_address: Optional[str] = None
+    placed_at: datetime
+    items: List[OrderItemResponse]
+    promo_codes: List[str] = []
+
+    class Config:
+        from_attributes = True
+
 
 class OrderStatusUpdate(BaseModel):
     status: str
