@@ -1,7 +1,7 @@
 import os
 from datetime import timedelta
 from fastapi import FastAPI, Depends, HTTPException, status, Query
-from fastapi.security import HTTPBearer, HTTPAuthCredentials
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 from sqlalchemy import func, and_, or_
 from decimal import Decimal
@@ -41,37 +41,87 @@ def health():
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
+@app.get("/users")
+def list_users(db: Session = Depends(get_db)):
+    return db.query(User).all()
+
+
 # ==================== Authentication ====================
+
+# @app.post("/auth/register", response_model=models.TokenResponse)
+# def register(user_data: models.UserRegister, db: Session = Depends(get_db)):
+#     """Register a new user"""
+#     # Check if user already exists
+#     if db.query(User).filter(User.email == user_data.email).first():
+#         raise HTTPException(
+#             status_code=status.HTTP_400_BAD_REQUEST,
+#             detail="Email already registered"
+#         )
+#
+#     # Create new user
+#     db_user = User(
+#         email=user_data.email,
+#         password_hash=hash_password(user_data.password),
+#         display_name=user_data.display_name
+#     )
+#
+#     # Create empty cart for user
+#     db.add(db_user)
+#     db.flush()
+#     db.refresh(db_user)
+#
+#     cart = Cart(user_id=db_user.user_id)
+#     db.add(cart)
+#     db.commit()
+#
+#     # Generate token
+#     access_token = create_access_token(data={"sub": user_data.email})
+#
+#     return {"access_token": access_token, "token_type": "bearer"}
 
 @app.post("/auth/register", response_model=models.TokenResponse)
 def register(user_data: models.UserRegister, db: Session = Depends(get_db)):
-    """Register a new user"""
-    # Check if user already exists
-    if db.query(User).filter(User.email == user_data.email).first():
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Email already registered"
+    try:
+        existing = db.query(User).filter(User.email == user_data.email).first()
+        if existing:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Email already registered"
+            )
+
+        hashed = hash_password(user_data.password)
+
+        db_user = User(
+            email=user_data.email,
+            password_hash=hashed,
+            display_name=user_data.display_name
         )
-    
-    # Create new user
-    db_user = User(
-        email=user_data.email,
-        password_hash=hash_password(user_data.password),
-        display_name=user_data.display_name
-    )
-    
-    # Create empty cart for user
-    db.add(db_user)
-    db.flush()
-    
-    cart = Cart(user_id=db_user.user_id)
-    db.add(cart)
-    db.commit()
-    
-    # Generate token
-    access_token = create_access_token(data={"sub": user_data.email})
-    
-    return {"access_token": access_token, "token_type": "bearer"}
+
+        db_user = User(
+            email=user_data.email,
+            password_hash=hash_password(user_data.password),
+            display_name=user_data.display_name
+        )
+
+        db.add(db_user)
+        db.flush()
+        db.refresh(db_user)
+
+        cart = Cart(user_id=db_user.user_id)
+        db.add(cart)
+
+        db.commit()
+        db.refresh(db_user)
+
+        access_token = create_access_token(data={"sub": user_data.email})
+        return {"access_token": access_token, "token_type": "bearer"}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/auth/login", response_model=models.TokenResponse)
 def login(user_data: models.UserLogin, db: Session = Depends(get_db)):
@@ -88,7 +138,7 @@ def login(user_data: models.UserLogin, db: Session = Depends(get_db)):
     return {"access_token": access_token, "token_type": "bearer"}
 
 def get_current_user(
-    credentials: HTTPAuthCredentials = Depends(security),
+    credentials: HTTPAuthorizationCredentials = Depends(security),
     db: Session = Depends(get_db)
 ) -> User:
     """Get current authenticated user"""
