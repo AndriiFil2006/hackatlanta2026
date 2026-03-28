@@ -49,4 +49,10 @@ VALUES (
       'Intel - Core Ultra 9 285K 24-Cores 24-Threads - 4.6GHz (5.7 GHz Turbo) Socket LGA 1851 Unlocked Desktop Processor - Multi',
       600,
       15,
-      'https://pisces.bbystatic.com/image2/BestBuy_US/images/products/0224860a-6519-429e-b610-38285cc3d33f.jpg;maxHeight=1920;maxWidth=900?format=webp');
+      'https://pisces.bbystatic.com/image2/BestBuy_US/images/products/0224860a-6519-429e-b610-38285cc3d33f.jpg;maxHeight=1920;maxWidth=900?format=webp')
+((SELECT category_id FROM categories WHERE category_name = 'CPU'),
+      'Intel - Core i9-14900K',
+      'Intel - Core i9-14900K 14th Gen 24-Core 32-Thread - 4.4GHz (6.0GHz Turbo) Socket LGA 1700 Unlocked Desktop Processor - Multi',
+      645,
+      15,
+      'https://pisces.bbystatic.com/image2/BestBuy_US/images/products/6560/6560418_sd.jpg;maxHeight=1920;maxWidth=900?format=webp');
