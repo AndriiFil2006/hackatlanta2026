@@ -28,3 +28,25 @@ INSERT INTO promo_codes (code, discount_type, discount_value, is_active, expires
   ('WELCOME10', 'percent', 10, TRUE, NULL),
   ('SAVE50', 'fixed', 50, TRUE, NULL)
 ON CONFLICT (code) DO NOTHING;
+
+
+INSERT INTO products(category_id, product_name, description, price, stock_quantity, image_url)
+VALUES (
+      (SELECT category_id FROM categories WHERE category_name = 'GPU'),
+      'Swift AMD Radeon RX 9070XT',
+      'XFX - Swift AMD Radeon RX 9070XT 16GB GDDR6 PCI Express 5.0 Gaming Graphics Card - Black',
+      720,
+      40,
+      'https://pisces.bbystatic.com/image2/BestBuy_US/images/products/548d6904-74fc-41d5-973b-224d5948e307.jpg;maxHeight=1920;maxWidth=900?format=webp'),
+((SELECT category_id FROM categories WHERE category_name = 'CPU'),
+      'Intel - Core i9-14900K',
+      'Intel - Core i9-14900K 14th Gen 24-Core 32-Thread - 4.4GHz (6.0GHz Turbo) Socket LGA 1700 Unlocked Desktop Processor - Multi',
+      500,
+      20,
+      'https://pisces.bbystatic.com/image2/BestBuy_US/images/products/6560/6560418_sd.jpg;maxHeight=1920;maxWidth=900?format=webp'),
+((SELECT category_id FROM categories WHERE category_name = 'CPU'),
+      'Intel - Core Ultra 9 285K',
+      'Intel - Core Ultra 9 285K 24-Cores 24-Threads - 4.6GHz (5.7 GHz Turbo) Socket LGA 1851 Unlocked Desktop Processor - Multi',
+      600,
+      15,
+      'https://pisces.bbystatic.com/image2/BestBuy_US/images/products/0224860a-6519-429e-b610-38285cc3d33f.jpg;maxHeight=1920;maxWidth=900?format=webp');

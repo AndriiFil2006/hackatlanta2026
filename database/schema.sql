@@ -85,3 +85,18 @@ CREATE TABLE order_promos (
     promo_code_id INTEGER NOT NULL REFERENCES promo_codes(promo_code_id) ON DELETE CASCADE,
     PRIMARY KEY (order_id, promo_code_id)
 );
+
+
+INSERT INTO categories(category_name, description)
+VALUES ('GPU', 'Graphics Processing Unit');
+
+
+INSERT INTO products(category_id, product_name, description, price, stock_quantity, image_url)
+VALUES (
+  	(SELECT category_id FROM categories WHERE category_name = 'GPU'),
+  	'NVIDIA GeForce RTX 4080',
+  	'NVIDIA GeForce RTX 4080 with 16GB GDDR6X memory, 9,728 CUDA Cores, 2.51 GHz Boost Clock, and Dedicated Ray Tracing Cores ',
+  	1500,
+  	12,
+  	'https://m.media-amazon.com/images/G/01/apparel/rcxgs/tile._CB483369110_.gif'
+);

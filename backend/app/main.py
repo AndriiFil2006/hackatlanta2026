@@ -502,14 +502,30 @@ def create_order(
     order_items: list[OrderItem] = []
 
     for cart_item in cart_items:
-        product = db.query(Product).filter(Product.product_id == cart_item.product_id).first()
+        product = (
+            db.query(Product)
+            .filter(Product.product_id == cart_item.product_id)
+            .with_for_update()
+            .first()
+        )
         if not product:
             raise HTTPException(
                 status_code=404, detail=f"Product {cart_item.product_id} not found"
             )
 
+        if product.stock_quantity < cart_item.quantity:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"Insufficient stock for '{product.product_name}': "
+                    f"need {cart_item.quantity}, have {product.stock_quantity}"
+                ),
+            )
+
         item_total = product.price * cart_item.quantity
         subtotal += item_total
+
+        product.stock_quantity -= cart_item.quantity
 
         order_items.append(
             OrderItem(
