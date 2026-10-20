@@ -1,39 +1,31 @@
-import os
-from dotenv import load_dotenv
-from sqlalchemy import create_engine, text
-from sqlalchemy.orm import sessionmaker, Session
+from sqlalchemy import create_engine, event
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
+from starlette.requests import Request
 
-load_dotenv()
 
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://user:password@localhost/market_db")
+def make_engine(url: str):
+    options = {"pool_pre_ping": True}
+    if url.startswith("sqlite"):
+        options["connect_args"] = {"check_same_thread": False}
+        if ":memory:" in url:
+            options["poolclass"] = StaticPool
+    else:
+        options.update(pool_size=5, max_overflow=5, connect_args={"connect_timeout": 5})
+    engine = create_engine(url, **options)
+    if url.startswith("sqlite"):
 
-# Create engine with connection pooling
-engine = create_engine(
-    DATABASE_URL,
-    pool_size=10,
-    max_overflow=20,
-    pool_pre_ping=True,  # Verify connections are alive before using
-    echo=False
-)
+        @event.listens_for(engine, "connect")
+        def enable_foreign_keys(connection, _):
+            connection.execute("PRAGMA foreign_keys=ON")
 
-# Create session factory
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    return engine
 
-def get_db():
-    """Dependency to get database session"""
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
 
-def test_connection():
-    """Test database connection"""
-    with engine.connect() as connection:
-        result = connection.execute(text("SELECT 1"))
-        return result.scalar()
+def session_factory(engine):
+    return sessionmaker(bind=engine, expire_on_commit=False)
 
-def init_db():
-    """Initialize database tables"""
-    from .schemas import Base
-    Base.metadata.create_all(bind=engine)
+
+def get_db(request: Request):
+    with request.app.state.sessions() as session:
+        yield session

@@ -19,3 +19,12 @@ frontend/dist/
 *.env
 !.env.example
 *.local
+
+# Local databases, tool caches, and browser-test artifacts
+*.db
+*.db-shm
+*.db-wal
+.pytest_cache/
+.ruff_cache/
+frontend/test-results/
+frontend/playwright-report/

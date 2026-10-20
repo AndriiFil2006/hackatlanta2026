@@ -1,100 +1,51 @@
-/* eslint-disable react-refresh/only-export-components -- hook colocated with provider */
-import {
-  createContext,
-  useCallback,
-  useContext,
-  useEffect,
-  useMemo,
-  useState,
-} from 'react'
-import {
-  clearToken,
-  getMe,
-  getToken,
-  loginRequest,
-  registerRequest,
-  setToken,
-} from './api.js'
+/* eslint-disable react-refresh/only-export-components */
+import { createContext, useContext, useEffect, useState } from 'react'
+import { api, clearToken, getToken, setToken } from './api'
 
 const AuthContext = createContext(null)
 
 export function AuthProvider({ children }) {
-  const [token, setTokenState] = useState(() => getToken())
-  const [user, setUser] = useState(null)
-  const [loading, setLoading] = useState(!!getToken())
-
-  const refreshUser = useCallback(async (t) => {
-    const tok = t ?? getToken()
-    if (!tok) {
-      setUser(null)
-      setLoading(false)
-      return
-    }
-    setLoading(true)
-    try {
-      const u = await getMe(tok)
-      setUser(u)
-    } catch {
-      clearToken()
-      setTokenState(null)
-      setUser(null)
-    } finally {
-      setLoading(false)
-    }
-  }, [])
+  const [session, setSession] = useState({ token: getToken(), user: null, loading: !!getToken() })
 
   useEffect(() => {
-    refreshUser(token)
-  }, [token, refreshUser])
-
-  const login = useCallback(async (email, password) => {
-    const { access_token } = await loginRequest(email, password)
-    setToken(access_token)
-    setTokenState(access_token)
-    await refreshUser(access_token)
-  }, [refreshUser])
-
-  const register = useCallback(
-    async (email, password, display_name) => {
-      const { access_token } = await registerRequest(
-        email,
-        password,
-        display_name,
-      )
-      setToken(access_token)
-      setTokenState(access_token)
-      await refreshUser(access_token)
-    },
-    [refreshUser],
-  )
-
-  const logout = useCallback(() => {
-    clearToken()
-    setTokenState(null)
-    setUser(null)
+    const controller = new AbortController()
+    const token = getToken()
+    if (token) {
+      api('/users/me', { token, signal: controller.signal })
+        .then((user) => setSession({ token, user, loading: false }))
+        .catch((error) => {
+          if (error.name !== 'AbortError') {
+            // A network outage should not erase an otherwise valid credential.
+            if (error.status === 401) clearToken()
+            setSession({ token: null, user: null, loading: false })
+          }
+        })
+    }
+    const expired = () => setSession({ token: null, user: null, loading: false })
+    window.addEventListener('circuit:session-expired', expired)
+    return () => {
+      controller.abort()
+      window.removeEventListener('circuit:session-expired', expired)
+    }
   }, [])
 
-  const value = useMemo(
-    () => ({
-      token,
-      user,
-      loading,
-      isAdmin: !!user?.is_admin,
-      login,
-      register,
-      logout,
-      refreshUser,
-    }),
-    [token, user, loading, login, register, logout, refreshUser],
-  )
+  async function authenticate(mode, values) {
+    const { access_token } = await api(`/auth/${mode}`, { method: 'POST', body: values })
+    const user = await api('/users/me', { token: access_token })
+    setToken(access_token)
+    setSession({ token: access_token, user, loading: false })
+  }
+
+  function logout() {
+    clearToken()
+    setSession({ token: null, user: null, loading: false })
+  }
 
   return (
-    <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
+    <AuthContext.Provider value={{ ...session, authenticate, logout }}>
+      {children}
+    </AuthContext.Provider>
   )
 }
 
-export function useAuth() {
-  const ctx = useContext(AuthContext)
-  if (!ctx) throw new Error('useAuth outside AuthProvider')
-  return ctx
-}
+export const useAuth = () => useContext(AuthContext)

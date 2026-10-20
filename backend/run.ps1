@@ -1,7 +1,4 @@
-# Startup script for development (Windows PowerShell)
-
-# Activate virtual environment
-& .\venv\Scripts\Activate.ps1
-
-# Run the FastAPI server
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+$ErrorActionPreference = 'Stop'
+Set-Location $PSScriptRoot
+uv run uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+exit $LASTEXITCODE

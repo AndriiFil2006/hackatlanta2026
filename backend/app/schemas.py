@@ -1,100 +1,189 @@
-from sqlalchemy import Column, Integer, String, Text, Float, Boolean, DateTime, ForeignKey, Numeric, UniqueConstraint
-from sqlalchemy.ext.declarative import declarative_base
 from datetime import datetime
+from decimal import Decimal
+from typing import Annotated, Literal
 
-Base = declarative_base()
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, StringConstraints, field_validator
 
-class User(Base):
-    __tablename__ = "users"
-    
-    user_id = Column(Integer, primary_key=True)
-    email = Column(String(255), unique=True, nullable=False)
-    password_hash = Column(Text, nullable=False)
-    display_name = Column(String(100), nullable=False)
-    is_admin = Column(Boolean, default=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
+Money = Annotated[Decimal, Field(ge=0, max_digits=10, decimal_places=2)]
+Quantity = Annotated[int, Field(ge=1, le=99)]
+OrderStatus = Literal["pending", "paid", "shipped", "delivered", "cancelled"]
 
-class Category(Base):
-    __tablename__ = "categories"
-    
-    category_id = Column(Integer, primary_key=True)
-    category_name = Column(String(100), unique=True, nullable=False)
-    description = Column(Text)
 
-class Product(Base):
-    __tablename__ = "products"
-    
-    product_id = Column(Integer, primary_key=True)
-    category_id = Column(Integer, ForeignKey("categories.category_id", ondelete="SET NULL"))
-    product_name = Column(String(150), nullable=False)
-    description = Column(Text)
-    price = Column(Numeric(10, 2), nullable=False)
-    stock_quantity = Column(Integer, default=0)
-    image_url = Column(Text)
-    is_featured = Column(Boolean, default=False)
-    is_active = Column(Boolean, default=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+class Contract(BaseModel):
+    model_config = ConfigDict(from_attributes=True, str_strip_whitespace=True, extra="forbid")
 
-class Cart(Base):
-    __tablename__ = "carts"
-    
-    cart_id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, ForeignKey("users.user_id", ondelete="CASCADE"), unique=True, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-class CartItem(Base):
-    __tablename__ = "cart_items"
-    
-    cart_item_id = Column(Integer, primary_key=True)
-    cart_id = Column(Integer, ForeignKey("carts.cart_id", ondelete="CASCADE"), nullable=False)
-    product_id = Column(Integer, ForeignKey("products.product_id", ondelete="CASCADE"), nullable=False)
-    quantity = Column(Integer, nullable=False)
-    __table_args__ = (UniqueConstraint("cart_id", "product_id", name="uq_cart_product"),)
+class UserRegister(Contract):
+    email: EmailStr
+    password: Annotated[str, StringConstraints(strip_whitespace=False)] = Field(
+        min_length=10, max_length=72
+    )
+    display_name: str = Field(min_length=1, max_length=100)
 
-class Order(Base):
-    __tablename__ = "orders"
-    
-    order_id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, ForeignKey("users.user_id", ondelete="RESTRICT"), nullable=False)
-    status = Column(String(30), default="pending", nullable=False)
-    total_amount = Column(Numeric(10, 2), nullable=False)
-    shipping_address = Column(Text)
-    placed_at = Column(DateTime, default=datetime.utcnow)
+    @field_validator("password")
+    @classmethod
+    def password_bytes(cls, value):
+        if len(value.encode()) > 72:
+            raise ValueError("Password must be at most 72 UTF-8 bytes")
+        return value
 
-class OrderItem(Base):
-    __tablename__ = "order_items"
-    
-    order_item_id = Column(Integer, primary_key=True)
-    order_id = Column(Integer, ForeignKey("orders.order_id", ondelete="CASCADE"), nullable=False)
-    product_id = Column(Integer, ForeignKey("products.product_id", ondelete="SET NULL"))
-    product_name_snapshot = Column(String(150), nullable=False)
-    unit_price = Column(Numeric(10, 2), nullable=False)
-    quantity = Column(Integer, nullable=False)
 
-class Review(Base):
-    __tablename__ = "reviews"
-    
-    review_id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, ForeignKey("users.user_id", ondelete="CASCADE"), nullable=False)
-    product_id = Column(Integer, ForeignKey("products.product_id", ondelete="CASCADE"), nullable=False)
-    rating = Column(Integer, nullable=False)
-    comment = Column(Text)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    __table_args__ = (UniqueConstraint("user_id", "product_id", name="uq_user_product"),)
+class UserLogin(Contract):
+    email: EmailStr
+    password: Annotated[str, StringConstraints(strip_whitespace=False)] = Field(
+        min_length=1, max_length=72
+    )
 
-class PromoCode(Base):
-    __tablename__ = "promo_codes"
-    
-    promo_code_id = Column(Integer, primary_key=True)
-    code = Column(String(50), unique=True, nullable=False)
-    discount_type = Column(String(20), nullable=False)  # 'percent' or 'fixed'
-    discount_value = Column(Numeric(10, 2), nullable=False)
-    is_active = Column(Boolean, default=True)
-    expires_at = Column(DateTime)
 
-class OrderPromo(Base):
-    __tablename__ = "order_promos"
-    
-    order_id = Column(Integer, ForeignKey("orders.order_id", ondelete="CASCADE"), primary_key=True)
-    promo_code_id = Column(Integer, ForeignKey("promo_codes.promo_code_id", ondelete="CASCADE"), primary_key=True)
+class UserResponse(Contract):
+    user_id: int
+    email: str
+    display_name: str
+    is_admin: bool
+    created_at: datetime
+
+
+class TokenResponse(Contract):
+    access_token: str
+    token_type: str = "bearer"
+
+
+class CategoryCreate(Contract):
+    category_name: str = Field(min_length=1, max_length=100)
+    description: str | None = Field(default=None, max_length=1000)
+
+
+class CategoryResponse(CategoryCreate):
+    category_id: int
+
+
+class ProductCreate(Contract):
+    category_id: int | None = None
+    product_name: str = Field(min_length=1, max_length=150)
+    description: str = Field(default="", max_length=5000)
+    price: Money
+    stock_quantity: int = Field(default=0, ge=0, le=1_000_000)
+    image_url: str | None = Field(default=None, max_length=2000)
+    source_url: str | None = Field(default=None, max_length=2000)
+    is_featured: bool = False
+    is_active: bool = True
+
+    @field_validator("source_url")
+    @classmethod
+    def manufacturer_url(cls, value):
+        if value and not value.startswith("https://"):
+            raise ValueError("Manufacturer URL must use HTTPS")
+        return value
+
+    @field_validator("image_url")
+    @classmethod
+    def image_path(cls, value):
+        if value and not (
+            value.startswith("https://") or (value.startswith("/products/") and ".." not in value)
+        ):
+            raise ValueError("Image must be an HTTPS URL or a /products/ asset path")
+        return value
+
+
+class ProductUpdate(ProductCreate):
+    """Full editable product contract; PUT replaces these fields."""
+
+
+class ProductResponse(ProductCreate):
+    average_rating: float | None = None
+    review_count: int = 0
+    demo_review_count: int = 0
+    product_id: int
+    created_at: datetime
+    description: str | None
+
+
+class ProductPage(Contract):
+    items: list[ProductResponse]
+    total: int
+    page: int
+    page_size: int
+
+
+class CartItemCreate(Contract):
+    product_id: int = Field(gt=0)
+    quantity: Quantity
+
+
+class CartItemUpdate(Contract):
+    quantity: Quantity
+
+
+class CartItemResponse(Contract):
+    cart_item_id: int
+    product_id: int
+    quantity: int
+    product_name: str
+    price: Decimal
+    image_url: str | None
+    stock_quantity: int
+    is_active: bool
+
+
+class CartResponse(Contract):
+    items: list[CartItemResponse]
+    subtotal: Decimal
+    shipping: Decimal
+    total: Decimal
+
+
+class OrderCreate(Contract):
+    shipping_address: str = Field(min_length=10, max_length=1000)
+    promo_code: str | None = Field(default=None, max_length=50)
+
+
+class OrderItemResponse(Contract):
+    order_item_id: int
+    product_id: int | None
+    product_name_snapshot: str
+    unit_price: Decimal
+    quantity: int
+
+
+class OrderResponse(Contract):
+    order_id: int
+    user_id: int
+    status: OrderStatus
+    total_amount: Decimal
+    subtotal_amount: Decimal
+    discount_amount: Decimal
+    shipping_amount: Decimal
+    shipping_address: str | None
+    placed_at: datetime
+    items: list[OrderItemResponse]
+    promo_codes: list[str]
+
+
+class OrderStatusUpdate(Contract):
+    status: OrderStatus
+
+
+class ReviewUpdate(Contract):
+    rating: int = Field(ge=1, le=5)
+    comment: str = Field(min_length=5, max_length=2000)
+
+
+class ReviewCreate(ReviewUpdate):
+    product_id: int = Field(gt=0)
+
+
+class ReviewResponse(Contract):
+    is_demo: bool
+    review_id: int
+    user_id: int
+    product_id: int
+    rating: int
+    comment: str | None
+    created_at: datetime
+    display_name: str
+
+
+class PromoCodeResponse(Contract):
+    code: str
+    discount_type: str
+    discount_value: Decimal

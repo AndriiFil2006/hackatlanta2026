@@ -1,81 +1,77 @@
-import os
-from datetime import datetime, timedelta
-from typing import Optional
+from datetime import UTC, datetime, timedelta
+
+import bcrypt
+from fastapi import Depends, HTTPException, Request
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
-from passlib.context import CryptContext
-from fastapi import Depends, HTTPException, status
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .schemas import User
+from .db import get_db
+from .models import User
 
-# Configuration
-SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-change-this-in-production")
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 30
+security = HTTPBearer(auto_error=False)
 
-# Password hashing
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 def hash_password(password: str) -> str:
-    """Hash a password using bcrypt"""
-    return pwd_context.hash(password)
+    return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
 
-def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """Verify a password against its hash"""
-    return pwd_context.verify(plain_password, hashed_password)
 
-def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
-    """Create a JWT access token"""
-    to_encode = data.copy()
-    if expires_delta:
-        expire = datetime.utcnow() + expires_delta
-    else:
-        expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    
-    to_encode.update({"exp": expire})
-    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
-    return encoded_jwt
-
-def verify_token(token: str) -> str:
-    """Verify and decode a JWT token"""
+def verify_password(password: str, hashed: str) -> bool:
     try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        email: str = payload.get("sub")
-        if email is None:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid token"
-            )
-        return email
-    except JWTError:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid token"
-        )
+        return bcrypt.checkpw(password.encode(), hashed.encode())
+    except (ValueError, TypeError):
+        return False
 
-# Security scheme
-security = HTTPBearer()
 
-async def get_current_user(
-    credentials: HTTPAuthorizationCredentials = Depends(security),
-    db: Session = Depends(None)  # Will be injected
+# Equalize password work for nonexistent accounts as well as wrong passwords.
+DUMMY_HASH = bcrypt.hashpw(b"not-a-real-account-password", bcrypt.gensalt()).decode()
+
+
+def create_access_token(user: User, settings) -> str:
+    now = datetime.now(UTC)
+    return jwt.encode(
+        {
+            "sub": str(user.user_id),
+            "iat": now,
+            "exp": now + timedelta(minutes=settings.token_minutes),
+            "iss": "circuit-market",
+        },
+        settings.secret_key,
+        algorithm="HS256",
+    )
+
+
+def get_current_user(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials | None = Depends(security),
+    db: Session = Depends(get_db),
 ) -> User:
-    """Get the current authenticated user from token"""
-    token = credentials.credentials
-    email = verify_token(token)
-    
-    # This will be properly injected in routes
-    if db is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Database connection not available"
+    error = HTTPException(
+        401,
+        "Your session has expired. Please sign in again.",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    if not credentials:
+        raise error
+    try:
+        payload = jwt.decode(
+            credentials.credentials,
+            request.app.state.settings.secret_key,
+            algorithms=["HS256"],
+            issuer="circuit-market",
+            options={"require_exp": True, "require_sub": True},
         )
-    
-    user = db.query(User).filter(User.email == email).first()
-    if user is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="User not found"
-        )
+        user_id = int(payload["sub"])
+    except (JWTError, ValueError, KeyError, TypeError):
+        raise error from None
+    user = db.scalar(select(User).where(User.user_id == user_id))
+    if not user:
+        raise error
+    return user
+
+
+def get_admin(user: User = Depends(get_current_user)) -> User:
+    if not user.is_admin:
+        raise HTTPException(403, "Administrator access required")
     return user

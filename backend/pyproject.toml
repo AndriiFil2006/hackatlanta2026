@@ -1,0 +1,30 @@
+[project]
+name = "jackpot-tech-market"
+version = "0.2.0"
+description = "A marketplace for learning how to operate and deploy a full-stack application."
+requires-python = ">=3.13"
+dependencies = [
+    "alembic>=1.15,<2",
+    "bcrypt>=4.3,<6",
+    "email-validator>=2.3.0",
+    "fastapi>=0.141.1",
+    "psycopg[binary]>=3.3.4",
+    "pydantic[email]>=2.13.4",
+    "python-dotenv>=1.2.3",
+    "python-jose[cryptography]>=3.5.0",
+    "sqlalchemy>=2.0.52",
+    "uvicorn[standard]>=0.52.4",
+]
+
+[dependency-groups]
+dev = ["httpx>=0.28,<1", "pytest>=8,<10", "ruff>=0.11,<1"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
